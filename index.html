@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Musical Manifold: Restored Analysis</title>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', Courier, monospace; color: #fff; }
+        #overlay { position: absolute; top: 20px; left: 20px; z-index: 10; pointer-events: none; text-transform: uppercase; }
+        .metric { font-size: 10px; margin-bottom: 5px; opacity: 0.5; }
+        .val { color: #00ffff; font-weight: bold; }
+        button { 
+            padding: 12px 24px; background: transparent; color: #fff; border: 1px solid #fff; 
+            cursor: pointer; pointer-events: auto; font-family: inherit; font-size: 10px;
+            letter-spacing: 2px;
+        }
+        button:hover { background: #fff; color: #000; }
+        canvas { display: block; }
+        #labels-hud { position: absolute; bottom: 20px; right: 20px; font-size: 9px; color: #666; text-align: right; pointer-events: none; line-height: 1.6; }
+    </style>
+</head>
+<body>
+
+<div id="overlay">
+    <button id="startBtn">Initiate Restored Manifold</button>
+    <div id="metrics" style="display:none; margin-top: 20px;">
+        <div class="metric">STRIKE (FLUX): <span id="m_flux" class="val">0</span></div>
+        <div class="metric">TILT (MFCC 1): <span id="m_mfcc1" class="val">0</span></div>
+        <div class="metric">BEND (MFCC 2): <span id="m_mfcc2" class="val">0</span></div>
+        <div class="metric">ENERGY (RMS): <span id="m_rms" class="val">0</span></div>
+        <div class="metric" style="color: #f00;">SIGNAL: <span id="m_gate" class="val">LOW</span></div>
+    </div>
+</div>
+
+<div id="labels-hud">
+    X: SPECTRAL TILT (BASSY vs BRIGHT)<br>
+    Y: TOP=STABLE NOTE, BOTTOM=RHYTHMIC STRIKE<br>
+    Z: TEXTURE IDENTITY (ADAPTIVE CURVATURE)
+</div>
+
+<script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    let scene, camera, renderer, controls;
+    let audioCtx, analyser, dataArray, prevDataArray;
+    let isRunning = false;
+
+    // Manifold Parameters
+    const MAX_POINTS = 3000;
+    const positions = new Float32Array(MAX_POINTS * 3);
+    const colors = new Float32Array(MAX_POINTS * 3);
+    const sizes = new Float32Array(MAX_POINTS);
+    const timestamps = new Float32Array(MAX_POINTS);
+    
+    let lineGeometry, lineMesh;
+    let pointGeometry, pointMesh;
+
+    // MFCC & Analysis State
+    let melFilterBank = [];
+    let mfcc = new Float32Array(13);
+    let features = { flux: 0, rms: 0 };
+    const bounds = { xMin: -5, xMax: 5, yMin: -5, yMax: 5, zMin: -5, zMax: 5 };
+
+    // --- NOISE GATE CONFIGURATION ---
+    const NOISE_GATE = 0.1; 
+
+    function init() {
+        scene = new THREE.Scene();
+        scene.fog = new THREE.Fog(0x000000, 200, 1200);
+        camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 3000);
+        camera.position.set(300, 300, 600);
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+        controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        const gridHelper = new THREE.GridHelper(1200, 40, 0x111111, 0x080808);
+        gridHelper.position.y = -200;
+        scene.add(gridHelper);
+        const axesHelper = new THREE.AxesHelper(400);
+        scene.add(axesHelper);
+
+        createLabel("SPECTRAL TILT (X)", new THREE.Vector3(450, 0, 0), "#ff4444");
+        createLabel("STRIKE / RHYTHM (Y)", new THREE.Vector3(0, 450, 0), "#44ff44");
+        createLabel("TEXTURE CURVATURE (Z)", new THREE.Vector3(0, 0, 450), "#4444ff");
+
+        // Negative Axis Lines
+        const createAxisLine = (end, color) => {
+            const geom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), end]);
+            const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color }));
+            scene.add(line);
+        };
+        createAxisLine(new THREE.Vector3(-400, 0, 0), 0x441111);
+        createAxisLine(new THREE.Vector3(0, -200, 0), 0x114411);
+        createAxisLine(new THREE.Vector3(0, 0, -400), 0x111144);
+
+        createLabel("DARK / BASSY (X-)", new THREE.Vector3(-450, 0, 0), "#882222");
+        createLabel("IMPACT / STRIKE (Y-)", new THREE.Vector3(0, -250, 0), "#228822");
+        createLabel("WIDE TEXTURE (Z-)", new THREE.Vector3(0, 0, -450), "#222288");
+
+        setupManifold();
+        window.addEventListener('resize', onWindowResize);
+    }
+
+    function createLabel(text, position, color) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 512; canvas.height = 128;
+        ctx.font = 'Bold 32px Courier New'; ctx.fillStyle = color;
+        ctx.textAlign = 'center'; ctx.fillText(text, 256, 64);
+        const texture = new THREE.CanvasTexture(canvas);
+        const spriteMaterial = new THREE.SpriteMaterial({ map: texture, transparent: true });
+        const sprite = new THREE.Sprite(spriteMaterial);
+        sprite.position.copy(position); sprite.scale.set(120, 30, 1);
+        scene.add(sprite);
+    }
+
+    function setupManifold() {
+        lineGeometry = new THREE.BufferGeometry();
+        lineGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        lineGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        const lineMaterial = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending });
+        lineMesh = new THREE.Line(lineGeometry, lineMaterial);
+        scene.add(lineMesh);
+
+        pointGeometry = new THREE.BufferGeometry();
+        pointGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        pointGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        pointGeometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+        const pointMaterial = new THREE.ShaderMaterial({
+            vertexShader: `
+                attribute float size;
+                varying vec3 vColor;
+                void main() {
+                    vColor = color;
+                    vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+                    gl_PointSize = size * ( 400.0 / -mvPosition.z );
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                varying vec3 vColor;
+                void main() {
+                    if ( length( gl_PointCoord - vec2( 0.5, 0.5 ) ) > 0.475 ) discard;
+                    gl_FragColor = vec4( vColor, 1.0 );
+                }
+            `,
+            vertexColors: true, transparent: true, blending: THREE.AdditiveBlending
+        });
+        pointMesh = new THREE.Points(pointGeometry, pointMaterial);
+        scene.add(pointMesh);
+    }
+
+    function createMelFilterBank(sampleRate, fftSize, numFilters = 26) {
+        const binCount = fftSize / 2;
+        const minMel = 0;
+        const maxMel = 2595 * Math.log10(1 + (sampleRate / 2) / 700);
+        const melStep = (maxMel - minMel) / (numFilters + 1);
+        const binFreqs = [];
+        for (let i = 0; i <= numFilters + 1; i++) {
+            const m = minMel + i * melStep;
+            const hz = 700 * (Math.pow(10, m / 2595) - 1);
+            let idx = Math.floor((fftSize) * hz / sampleRate);
+            if (idx >= binCount) idx = binCount - 1;
+            binFreqs.push(idx);
+        }
+        const filters = [];
+        for (let i = 1; i <= numFilters; i++) {
+            const filter = new Float32Array(binCount);
+            for (let j = binFreqs[i - 1]; j < binFreqs[i]; j++) filter[j] = (j - binFreqs[i - 1]) / (binFreqs[i] - binFreqs[i - 1]);
+            for (let j = binFreqs[i]; j < binFreqs[i + 1]; j++) filter[j] = (binFreqs[i + 1] - j) / (binFreqs[i + 1] - binFreqs[i]);
+            filters.push(filter);
+        }
+        return filters;
+    }
+
+    function applyDCT(input) {
+        const output = new Float32Array(13);
+        for (let i = 0; i < 13; i++) {
+            let sum = 0;
+            for (let j = 0; j < input.length; j++) sum += input[j] * Math.cos(Math.PI / input.length * (j + 0.5) * i);
+            output[i] = sum;
+        }
+        return output;
+    }
+
+    async function startAudio() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 1024;
+            const source = audioCtx.createMediaStreamSource(stream);
+            source.connect(analyser);
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+            prevDataArray = new Uint8Array(analyser.frequencyBinCount);
+            melFilterBank = createMelFilterBank(audioCtx.sampleRate, 1024);
+            document.getElementById('startBtn').style.display = 'none';
+            document.getElementById('metrics').style.display = 'block';
+            isRunning = true;
+            animate();
+        } catch (err) { console.error(err); }
+    }
+
+    function calculateDescriptors() {
+        analyser.getByteFrequencyData(dataArray);
+        let flux = 0, rms = 0;
+        const filterEnergies = new Float32Array(melFilterBank.length);
+        const fluxLimit = Math.floor(dataArray.length * 0.75);
+        for (let i = 0; i < dataArray.length; i++) {
+            const amp = dataArray[i] / 255;
+            rms += amp * amp;
+            if (i < fluxLimit) {
+                const diff = amp - (prevDataArray[i] / 255);
+                if (diff > 0) flux += diff;
+            }
+        }
+        for (let i = 0; i < melFilterBank.length; i++) {
+            let energy = 0;
+            for (let j = 0; j < dataArray.length; j++) energy += (dataArray[j] / 255) * melFilterBank[i][j];
+            filterEnergies[i] = Math.log(energy + 0.0001);
+        }
+        mfcc = applyDCT(filterEnergies);
+        features.flux = flux;
+        features.rms = Math.sqrt(rms / dataArray.length);
+        prevDataArray.set(dataArray);
+        document.getElementById('m_flux').innerText = features.flux.toFixed(2);
+        document.getElementById('m_mfcc1').innerText = mfcc[1].toFixed(2);
+        document.getElementById('m_mfcc2').innerText = mfcc[2].toFixed(2);
+        document.getElementById('m_rms').innerText = features.rms.toFixed(4);
+        const gateUI = document.getElementById('m_gate');
+        if (features.rms > NOISE_GATE) {
+            gateUI.innerText = "ACTIVE"; gateUI.style.color = "#0f0";
+        } else {
+            gateUI.innerText = "GATED"; gateUI.style.color = "#f00";
+        }
+    }
+
+    function updateManifold() {
+        const now = performance.now();
+        const active = features.rms > NOISE_GATE;
+
+        if (active) {
+            const smooth = 0.005;
+            const tXMin = mfcc[1]-0.5; const tXMax = mfcc[1]+0.5;
+            const tYMin = mfcc[2]-0.5; const tYMax = mfcc[2]+0.5;
+            const tZMin = mfcc[3]-0.5; const tZMax = mfcc[3]+0.5;
+            
+            if (mfcc[1] < bounds.xMin) bounds.xMin = mfcc[1]; else bounds.xMin = bounds.xMin * (1-smooth) + tXMin * smooth;
+            if (mfcc[1] > bounds.xMax) bounds.xMax = mfcc[1]; else bounds.xMax = bounds.xMax * (1-smooth) + tXMax * smooth;
+            if (mfcc[2] < bounds.yMin) bounds.yMin = mfcc[2]; else bounds.yMin = bounds.yMin * (1-smooth) + tYMin * smooth;
+            if (mfcc[2] > bounds.yMax) bounds.yMax = mfcc[2]; else bounds.yMax = bounds.yMax * (1-smooth) + tYMax * smooth;
+            if (mfcc[3] < bounds.zMin) bounds.zMin = mfcc[3]; else bounds.zMin = bounds.zMin * (1-smooth) + tZMin * smooth;
+            if (mfcc[3] > bounds.zMax) bounds.zMax = mfcc[3]; else bounds.zMax = bounds.zMax * (1-smooth) + tZMax * smooth;
+            
+            if (Math.abs(bounds.xMax - bounds.xMin) < 0.1) bounds.xMax = bounds.xMin + 1;
+            if (Math.abs(bounds.yMax - bounds.yMin) < 0.1) bounds.yMax = bounds.yMin + 1;
+            if (Math.abs(bounds.zMax - bounds.zMin) < 0.1) bounds.zMax = bounds.zMin + 1;
+
+            const nx = (mfcc[1] - bounds.xMin) / (bounds.xMax - bounds.xMin);
+            const ny = (mfcc[2] - bounds.yMin) / (bounds.yMax - bounds.yMin);
+            const nz = (mfcc[3] - bounds.zMin) / (bounds.zMax - bounds.zMin);
+
+            const x = (nx * 600) - 300;
+            const base_y = (ny * 300) - 50; 
+            const strike = Math.pow(features.flux / 10, 1.2) * 120; 
+            const y = base_y - strike;
+            const z = (nz * 500) - 250;
+
+            for (let i = MAX_POINTS - 1; i > 0; i--) {
+                positions[i*3] = positions[(i-1)*3];
+                positions[i*3+1] = positions[(i-1)*3+1];
+                positions[i*3+2] = positions[(i-1)*3+2];
+                sizes[i] = sizes[i-1];
+                timestamps[i] = timestamps[i-1];
+            }
+            positions[0] = x; positions[1] = Math.max(-200, y); positions[2] = z;
+            timestamps[0] = now; sizes[0] = 3.0 + (features.rms * 150);
+        }
+
+        for (let i = 0; i < MAX_POINTS; i++) {
+            const ageSeconds = (now - timestamps[i]) / 1000;
+            const fade = Math.max(0, 1.0 - (ageSeconds / 5.0));
+            if (fade <= 0 || timestamps[i] === 0) {
+                colors[i*3] = colors[i*3+1] = colors[i*3+2] = 0;
+                sizes[i] = 0;
+            } else {
+                if (i < 10 && active) {
+                    colors[i*3] = colors[i*3+1] = colors[i*3+2] = 1.0;
+                } else {
+                    const hue = Math.max(0, 0.5 - (ageSeconds / 5.0 * 1.5));
+                    const color = new THREE.Color().setHSL(hue, 1.0, 0.6 * fade);
+                    colors[i*3] = color.r; colors[i*3+1] = color.g; colors[i*3+2] = color.b;
+                }
+            }
+        }
+
+        lineGeometry.attributes.position.needsUpdate = true;
+        lineGeometry.attributes.color.needsUpdate = true;
+        pointGeometry.attributes.position.needsUpdate = true;
+        pointGeometry.attributes.color.needsUpdate = true;
+        pointGeometry.attributes.size.needsUpdate = true;
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        if (isRunning) {
+            calculateDescriptors();
+            updateManifold();
+        }
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    document.getElementById('startBtn').addEventListener('click', startAudio);
+    init();
+</script>
+</body>
+</html>
