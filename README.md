@@ -1,4 +1,4 @@
-# Bird Song: Spatiotemporal Acoustic Manifold
+# Spatiotemporal Acoustic Manifold
 
 A real-time, web-based generative sculpture that transforms complex audio signals into 3D spatial structures. This project is a technical implementation of the **Spatiotemporal Acoustic Manifold** concept, inspired by the work of [Lucio Arese](https://www.lucioarese.net/) and his "Seeing Birdsong" (Visual Birds) series.
 
