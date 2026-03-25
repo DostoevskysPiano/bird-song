@@ -1,16 +1,16 @@
 # Bird Song: Spatiotemporal Acoustic Manifold
 
-A real-time, web-based generative sculpture that transforms complex audio signals into 3D spatial structures. This project is a technical implementation of the **Spatiotemporal Acoustic Manifold** concept, heavily inspired by the pioneering work of [Lucio Arese](https://www.lucioarese.net/) and his "Seeing Birdsong" (Visual Birds) series.
+A real-time, web-based generative sculpture that transforms complex audio signals into 3D spatial structures. This project is a technical implementation of the **Spatiotemporal Acoustic Manifold** concept, inspired by the work of [Lucio Arese](https://www.lucioarese.net/) and his "Seeing Birdsong" (Visual Birds) series.
 
 ## 🎨 Inspiration: The Arese Methodology
 
 This tool adopts Lucio Arese’s philosophy of **"Synesthesia by Design."** It moves beyond simple frequency-to-height mapping used in traditional spectrograms. Instead, it treats sound as a high-dimensional data source that can be "unfolded" into a geometric sculpture.
 
-As Arese demonstrates in his bioacoustic research, bird songs contain dense "mathematical fingerprints" that define their species and individual identity. By mapping these features to a 3D manifold, we can see the **vocal trajectories** and **structural architecture** hidden within the sound.
+Bird songs contain dense mathematical fingerprints that define their species and individual identity. By mapping these features to a 3D manifold, we can see the **vocal trajectories** and **structural architecture** hidden within the sound.
 
 ## 🧬 Advanced Timbral Analysis
 
-While pitch (frequency) and volume (amplitude) are easily visualized, **Timbre**—the "color" or "texture" of sound—is historically difficult to see. This tool uses **Mel-Frequency Cepstral Coefficients (MFCCs)** to extract and analyze the specific parts of timbre:
+While pitch (frequency) and volume (amplitude) are easily visualized, **Timbre** is difficult to see. This tool uses **Mel-Frequency Cepstral Coefficients (MFCCs)** to extract and analyze the specific parts of timbre:
 
 | Dimension | Analysis Target | Acoustic Property |
 | :--- | :--- | :--- |
@@ -32,6 +32,3 @@ Sound data is high-dimensional. Every snapshot of audio contains hundreds of fre
 1. Open `index.html` in a modern browser.
 2. Click **"Initiate Restored Manifold"** to start the analysis.
 3. Observe how different sound sources (voice, music, or nature recordings) create unique 3D "fingerprints."
-
----
-*Inspired by the "Visual Birds" series by Lucio Arese*
